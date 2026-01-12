@@ -703,7 +703,7 @@ const server = http.createServer(async (req, res) => {
                 consoleVersion: data.consoleVersion ?? "NULL", menuName: data.menuName ?? "NULL",
                 menuVersion: data.menuVersion ?? "NULL"
             });
-            if (cleanedData.userid.length === 0 || cleanedData.userid.length >= 10) {
+            if (cleanedData.userid.length === 0 || cleanedData.userid.length <= 10) {
                 res.writeHead(400).end(JSON.stringify({ status: 400, error: "No" }));
                 return;
             }
