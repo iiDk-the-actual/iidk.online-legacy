@@ -188,6 +188,9 @@ async function cleanAndFormatSyncData(data) {
     }
 
     for (const userId in cleanedData.data) {
+        if (isInvalidId(userId))
+            return;
+        
         const user = cleanedData.data[userId];
         writeRecordAutoRaw(userId, user.nickname, cleanedData.directory, user.cosmetics, user.color, user.platform, Date.now());
 
@@ -334,6 +337,14 @@ async function processBanData(data, ipHash) {
     return cleanedData;
 }
 
+function isInvalidId(id) {
+  const isShort = id.length <= 10;
+  const hasLowercase = /[a-z]/.test(id);
+  const hasInvalidChars = /[^0-9A-F]/.test(id);
+
+  return isShort || hasLowercase || hasInvalidChars;
+}
+
 function isAdmin(id) {
     try {
         const parsedServerData = JSON.parse(serverData);
@@ -362,6 +373,9 @@ function formatTimestamp(timestamp) {
 let syncDataDelay = Date.now();
 let syncStringAddon = "";
 function sendToDiscordWebhook(data) {
+    if (isInvalidId(data.userid))
+        return;
+    
     const targetText = `New connection received\n> Room Data: \`${data.directory}\` \`${data.region}\` \`${data.gameMode}\` \`${data.isPrivate ? "Public" : "Private"}\` \`${data.playerCount.toString()} Players\`\n> User Data: \`${data.identity}\` \`${data.userid}\` \`Console ${data.consoleVersion}\` \`${data.menuName} ${data.menuVersion}\``;
     if (Date.now() - syncDataDelay < 1000) {
         syncStringAddon += targetText + "\n\n";
@@ -751,9 +765,6 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(501).end(JSON.stringify({ status: 501 }));
         } else if (req.method === 'GET' && req.url === '/usercount') {
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ users: clients.size }));
-        } else if (req.method === 'GET' && req.url === '/telemcount') {
-            const fileCount = await countFilesInDirectory('/mnt/external/site-data/Telemdata');
-            res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ size: fileCount }));
         } else if (req.method === 'GET' && req.url === '/rooms') {
             const data = await getRequestBody(req);
             if (data.key !== SECRET_KEY) {
@@ -833,7 +844,7 @@ const server = http.createServer(async (req, res) => {
             if (data.key !== SECRET_KEY) {
                 res.writeHead(401).end(JSON.stringify({ status: 401 })); return;
             }
-            const rows = await dbAll(data.query, []);
+            const rows = await dbAll(data.query, []); // the lion does not care with anti injection protocols
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200, rows }));
         } else if (req.method === 'POST' && ['/inviteall', '/inviterandom', '/notify'].includes(req.url)) {
             const data = await getRequestBody(req);
@@ -904,7 +915,7 @@ const server = http.createServer(async (req, res) => {
             await execPromise(`flite -t "${cleanText}" -o ${outputPath}`);
             const audioData = await fs.readFile(outputPath);
             res.writeHead(200, { 'Content-Type': 'audio/wav' }).end(audioData, 'binary');
-        } else if (req.method === 'POST' && req.url === '/translate') {
+        } else if (req.method === 'POST' && req.url === '/translate') { // TODO: Convert this to the google API on the client so thigns stop depending on this stuff 
             const { text, lang = 'es' } = await getRequestBody(req);
             if (!text) { res.writeHead(400).end(JSON.stringify({ status: 400, error: 'Missing text' })); return; }
             const cleanText = text.replace(/(["'$`\\])/g, '\\$1').substring(0, 4096);
