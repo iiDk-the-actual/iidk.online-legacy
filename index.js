@@ -127,7 +127,7 @@ function getVoteCounts() {
     });
 }
 
-function hashIpAddr(ip) {
+function hashIpAddr(ip) { // TODO: salt
     const h = crypto.createHmac('sha256', HASH_KEY).update(ip).digest();
     return h.toString('hex');
 }
