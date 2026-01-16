@@ -717,8 +717,8 @@ const server = http.createServer(async (req, res) => {
                 menuVersion: data.menuVersion ?? "NULL"
             });
             if (cleanedData.userid.length === 0 || cleanedData.userid.length <= 10) {
+                bannedIps[clientIp] = Date.now();
                 res.writeHead(400).end(JSON.stringify({ status: 400, error: "No" }));
-                console.log("lol you fail");
                 return;
             }
             activeRooms[cleanedData.directory] = {
@@ -726,6 +726,7 @@ const server = http.createServer(async (req, res) => {
                 isPrivate: cleanedData.isPrivate, timestamp: Date.now()
             };
             if (!canWriteTelemData(ipHash, cleanedData.userid)) {
+                bannedIps[clientIp] = Date.now();
                 res.writeHead(410).end(JSON.stringify({ status: 410 }));
                 return;
             }
@@ -748,20 +749,6 @@ const server = http.createServer(async (req, res) => {
             activeUserData[cleanedData.directory] = { region: cleanedData.region, roomdata: cleanedData.data, timestamp: Date.now() };
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200 }));
         } else if (req.method === 'POST' && req.url === '/reportban') {
-            /*
-            if (reportBanRequestTimestamps[clientIp] && Date.now() - reportBanRequestTimestamps[clientIp] < 1800000) {
-                res.writeHead(429).end(JSON.stringify({ status: 429 })); return;
-            }
-            reportBanRequestTimestamps[clientIp] = Date.now();
-            if (bannedIps[clientIp] && Date.now() - bannedIps[clientIp] < 1800000) {
-                res.writeHead(200).end(JSON.stringify({ status: 200 })); return;
-            }
-            if (req.headers['user-agent'] != 'UnityPlayer/6000.2.9f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)') {
-                bannedIps[clientIp] = Date.now();
-            }
-            const { error, version, data } = await getRequestBody(req);
-            await processBanData({ error, version, data }, ipHash);
-            */
             res.writeHead(501).end(JSON.stringify({ status: 501 }));
         } else if (req.method === 'GET' && req.url === '/usercount') {
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ users: clients.size }));
@@ -916,7 +903,7 @@ const server = http.createServer(async (req, res) => {
             const audioData = await fs.readFile(outputPath);
             res.writeHead(200, { 'Content-Type': 'audio/wav' }).end(audioData, 'binary');
         } else if (req.method === 'POST' && req.url === '/translate') { // moved
-            res.writeHead(404, { 'Content-Type': 'application/json' }).end(JSON.stringify({ "translation": "This endpoint has been disabled. Please switch to the official Google Translate API or await your application to update." }));
+            res.writeHead(501, { 'Content-Type': 'application/json' }).end(JSON.stringify({ "translation": "This endpoint has been disabled. Please switch to the official Google Translate API or await your application to update." }));
         } else if (req.method === 'GET' && req.url === "/getfriends") {
             if (getFriendTime[clientIp] && Date.now() - getFriendTime[clientIp] < 29000) {
                 res.writeHead(429).end(JSON.stringify({ status: 429 })); return;
@@ -930,7 +917,8 @@ const server = http.createServer(async (req, res) => {
             const friendDataFile = `/mnt/external/site-data/Frienddata/${target}.json`
             let returnData = { friends: {}, incoming: {}, outgoing: {} };
 
-            if (await fileExists(friendDataFile)){
+            const online = isUserOnline(ipHash);
+            if (online && await fileExists(friendDataFile)){
                 const selfFriendData = JSON.parse(await fs.readFile(friendDataFile, 'utf8'));
 
                 const allIdsMap = {};
@@ -1037,7 +1025,8 @@ const server = http.createServer(async (req, res) => {
             await fs.writeFile(`/mnt/external/site-data/Frienddata/${ipHash}.json`, JSON.stringify(selfData, null, 2), 'utf8');
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ "status": 200 }));
         } else if (req.method === 'GET' && req.url === '/gpt') {
-
+            res.writeHead(501).end(JSON.stringify({ status: 501 }));
+            /*
             if (tokenRequestCooldown[clientIp] && Date.now() - tokenRequestCooldown[clientIp] < tokenBankCooldown) {
                 res.writeHead(429, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 429, error: "Too many requests." }));
                 return;
@@ -1051,8 +1040,10 @@ const server = http.createServer(async (req, res) => {
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200, token }));
-
+            */
         } else if (req.method === 'POST' && req.url === '/spt') {
+            res.writeHead(501).end(JSON.stringify({ status: 501 }));
+            /*
             const data = await getRequestBody(req);
 
             if (data.key !== SECRET_KEY) {
@@ -1067,7 +1058,10 @@ const server = http.createServer(async (req, res) => {
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200, count: await getTokenLength() }));
+            */
         } else if (req.method === 'GET' && req.url === '/pt') {
+            res.writeHead(501).end(JSON.stringify({ status: 501 }));
+            /*
             const data = await getRequestBody(req);
             if (data.data == true) {
                 if (data.key !== SECRET_KEY && !data.key) {
@@ -1079,6 +1073,7 @@ const server = http.createServer(async (req, res) => {
                 return;
             }
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200, count: await getTokenLength() }));
+            */
         } else if (req.method === 'GET' && (req.url === "/" || req.url === "")) {
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200, message: "This is an API. You can not view it like a website. Check out https://github.com/iiDk-the-actual/iidk.online for more info." }));
         } else {
