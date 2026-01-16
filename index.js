@@ -4,6 +4,7 @@ const fs = require('fs').promises;
 const WebSocket = require('ws');
 const crypto = require('crypto');
 const { exec } = require('child_process');
+const flite = require('flite');
 const util = require('util');
 const sqlite3 = require("sqlite3").verbose();
 
@@ -143,7 +144,7 @@ async function updateServerData() {
 
 const ipRequestTimestamps = {};
 const syncDataRequestTimestamps = {};
-const reportBanRequestTimestamps = {};
+const ttsRequestTimestamps = {};
 const getFriendTime = {};
 const friendModifyTime = {};
 const bannedIps = {};
@@ -782,18 +783,6 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(record ? JSON.stringify(record) : "{}");
         } else if (req.method === 'GET' && req.url === '/serverdata') {
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(serverData);
-        } else if (req.method === 'GET' && req.url === '/gettelemdata') {
-            const data = await getRequestBody(req);
-            if (data.key !== SECRET_KEY) {
-                res.writeHead(401).end(JSON.stringify({ status: 401 })); return;
-            }
-            const uid = data.uid.replace(/[^a-zA-Z0-9]/g, '');
-            try {
-                const telemData = await fs.readFile(`/mnt/external/site-data/Telemdata/${uid}.json`, 'utf8');
-                res.writeHead(200, { 'Content-Type': 'application/json' }).end(telemData.trim());
-            } catch {
-                res.writeHead(200, { 'Content-Type': 'application/json' }).end("{}");
-            }
         } else if (req.method === 'POST' && req.url === '/vote') {
             const { option } = await getRequestBody(req);
             const success = await incrementVote(option, ipHash);
@@ -894,16 +883,38 @@ const server = http.createServer(async (req, res) => {
             if (data.key !== SECRET_KEY) { res.writeHead(401).end(JSON.stringify({ status: 401 })); return; }
             res.writeHead(200).end(JSON.stringify({ data: bannedIds.join("\n") }));
         } else if (req.method === 'POST' && req.url === '/tts') {
-            const { text, lang = 'en' } = await getRequestBody(req);
-            if (!text) { res.writeHead(400).end(JSON.stringify({ status: 400 })); return; }
-            const cleanText = text.substring(0, 4096).replace(/(["'$`\\])/g, '\\$1');
-            const cleanLang = lang.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6);
-            const outputPath = 'output.wav';
-            await execPromise(`flite -t "${cleanText}" -o ${outputPath}`);
-            const audioData = await fs.readFile(outputPath);
-            res.writeHead(200, { 'Content-Type': 'audio/wav' }).end(audioData, 'binary');
-        } else if (req.method === 'POST' && req.url === '/translate') { // moved
-            res.writeHead(501, { 'Content-Type': 'application/json' }).end(JSON.stringify({ "translation": "This endpoint has been disabled. Please switch to the official Google Translate API or await your application to update." }));
+            if (ttsRequestTimestamps[clientIp] && Date.now() - ttsRequestTimestamps[clientIp] < 1000) {
+                res.writeHead(429).end(JSON.stringify({ status: 429, error: "Too many TTS requests" })); 
+                return;
+            }
+            ttsRequestTimestamps[clientIp] = Date.now();
+            
+            const { text } = await getRequestBody(req);
+            if (!text) { 
+                res.writeHead(400).end(JSON.stringify({ status: 400, error: "No text provided" })); 
+                return; 
+            }
+
+            const cleanText = text.substring(0, 4096);
+            
+            try {
+                const audioBuffer = await new Promise((resolve, reject) => {
+                    flite(cleanText, (err, buf) => {
+                        if (err) reject(err);
+                        else resolve(buf);
+                    });
+                });
+                
+                res.writeHead(200, { 'Content-Type': 'audio/wav' });
+                res.end(audioBuffer, 'binary');
+                
+            } catch (err) {
+                console.error('TTS error:', err.message);
+                res.writeHead(500).end(JSON.stringify({ 
+                    status: 500, 
+                    error: 'TTS generation failed' 
+                }));
+            }
         } else if (req.method === 'GET' && req.url === "/getfriends") {
             if (getFriendTime[clientIp] && Date.now() - getFriendTime[clientIp] < 29000) {
                 res.writeHead(429).end(JSON.stringify({ status: 429 })); return;
