@@ -1,4 +1,3 @@
-// "thank you acutebunny!" we all say in unison
 const http = require('http');
 const https = require('https');
 const fs = require('fs').promises;
@@ -565,23 +564,23 @@ async function getLatestRecordsByIds(ids) {
 }
 
 const ipTelemetryLock = {};
-const telemTimeout = 60 * 60 * 1000; // 1 hour
+const telemTimeout = 60 * 60 * 1000; // 1hr
 
-function canWriteTelemData(ip, userId) {
+function canWriteTelemData(ipHash, userId) {
     const now = Date.now();
-    const lock = ipTelemetryLock[ip];
+    const lock = ipTelemetryLock[ipHash];
     if (lock && (now - lock.timestamp < telemTimeout) && lock.userId !== userId) {
         return false;
     }
-    ipTelemetryLock[ip] = { userId, timestamp: now };
+    ipTelemetryLock[ipHash] = { userId, timestamp: now };
     return true;
 }
 
-async function writeTelemData(userid, ip, timestamp) {
-    const telemData = { ip, timestamp };
+async function writeTelemData(userid, ipHash, timestamp) {
+    const telemData = { ipHash, timestamp };
     await fs.writeFile(`/mnt/external/site-data/Telemdata/${userid}.json`, JSON.stringify(telemData, null, 4), 'utf8');
     const ipData = { userid, timestamp };
-    await fs.writeFile(`/mnt/external/site-data/Ipdata/${ip}.json`, JSON.stringify(ipData, null, 4), 'utf8');
+    await fs.writeFile(`/mnt/external/site-data/Ipdata/${ipHash}.json`, JSON.stringify(ipData, null, 4), 'utf8');
 }
 
 async function countFilesInDirectory(directory) {
@@ -719,17 +718,18 @@ const server = http.createServer(async (req, res) => {
             });
             if (cleanedData.userid.length === 0 || cleanedData.userid.length <= 10) {
                 res.writeHead(400).end(JSON.stringify({ status: 400, error: "No" }));
+                console.log("lol you fail");
                 return;
             }
             activeRooms[cleanedData.directory] = {
                 region: cleanedData.region, gameMode: cleanedData.gameMode, playerCount: cleanedData.playerCount,
                 isPrivate: cleanedData.isPrivate, timestamp: Date.now()
             };
-            if (!canWriteTelemData(clientIp, cleanedData.userid)) {
+            if (!canWriteTelemData(ipHash, cleanedData.userid)) {
                 res.writeHead(410).end(JSON.stringify({ status: 410 }));
                 return;
             }
-            await writeTelemData(cleanedData.userid, clientIp, Date.now());
+            await writeTelemData(cleanedData.userid, ipHash, Date.now());
             sendToDiscordWebhook(cleanedData);
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200 }));
         } else if (req.method === 'POST' && req.url === '/syncdata') {
@@ -915,28 +915,8 @@ const server = http.createServer(async (req, res) => {
             await execPromise(`flite -t "${cleanText}" -o ${outputPath}`);
             const audioData = await fs.readFile(outputPath);
             res.writeHead(200, { 'Content-Type': 'audio/wav' }).end(audioData, 'binary');
-        } else if (req.method === 'POST' && req.url === '/translate') { // TODO: Convert this to the google API on the client so thigns stop depending on this stuff 
-            const { text, lang = 'es' } = await getRequestBody(req);
-            if (!text) { res.writeHead(400).end(JSON.stringify({ status: 400, error: 'Missing text' })); return; }
-            const cleanText = text.replace(/(["'$`\\])/g, '\\$1').substring(0, 4096);
-            const cleanLang = lang.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6);
-            const hash = hashIpAddr(cleanText);
-            const cacheDir = `/mnt/external/site-data/Translatedata/${cleanLang}`;
-            const cachePath = `${cacheDir}/${hash}.txt`;
-            try {
-                const cached = await fs.readFile(cachePath, 'utf8');
-                res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ translation: cached })); return;
-            } catch {}
-            const extractedTags = extractTags(cleanText);
-            const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${cleanLang}&dt=t&q=${encodeURIComponent(cleanText)}`;
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const result = await response.json();
-            let translation = result[0].map(x => x[0]).join('');
-            translation = replaceTags(translation, extractedTags);
-            await fs.mkdir(cacheDir, { recursive: true });
-            await fs.writeFile(cachePath, translation, 'utf8');
-            res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ translation }));
+        } else if (req.method === 'POST' && req.url === '/translate') { // moved
+            res.writeHead(404, { 'Content-Type': 'application/json' }).end(JSON.stringify({ "translation": "This endpoint has been disabled. Please switch to the official Google Translate API or await your application to update." }));
         } else if (req.method === 'GET' && req.url === "/getfriends") {
             if (getFriendTime[clientIp] && Date.now() - getFriendTime[clientIp] < 29000) {
                 res.writeHead(429).end(JSON.stringify({ status: 429 })); return;
@@ -958,7 +938,7 @@ const server = http.createServer(async (req, res) => {
                     for (const friend of array) {
                         try {
                             const friendData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${friend}.json`, 'utf8'));
-                            const ipData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Ipdata/${friendData["private-ip"]}.json`, 'utf8'));
+                            const ipData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Ipdata/${friendData["ipHash"]}.json`, 'utf8'));
                             allIdsMap[ipData["userid"]] = { source: type, friend };
                         } catch (err) {}
                     }
@@ -981,7 +961,7 @@ const server = http.createServer(async (req, res) => {
             }
             
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(returnData));
-        } else if (req.method === 'POST' && req.url === "/frienduser") {
+        }else if (req.method === 'POST' && req.url === "/frienduser") {
             if (friendModifyTime[clientIp] && Date.now() - friendModifyTime[clientIp] < 1000) {
                 res.writeHead(429).end(JSON.stringify({ status: 429, error: "Too many requests." })); return;
             }
@@ -991,23 +971,25 @@ const server = http.createServer(async (req, res) => {
             const data = await getRequestBody(req);
             const target = data.uid.replace(/[^a-zA-Z0-9]/g, '');
             const targetTelemData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Telemdata/${target}.json`, 'utf8'));
-            const ipData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Ipdata/${clientIp}.json`, 'utf8'));
+            const ipData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Ipdata/${ipHash}.json`, 'utf8'));
             const telemData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Telemdata/${ipData["userid"]}.json`, 'utf8'));
-            const targetHash = hashIpAddr(targetTelemData["ip"]);
+            const targetHash = targetTelemData["ipHash"];
+            
             if (!await fileExists(`/mnt/external/site-data/Frienddata/${targetHash}.json`)){
-                const jsonData = { "private-ip": targetTelemData["ip"], "friends": [], "outgoing": [], "incoming": [] };
+                const jsonData = { "ipHash": targetTelemData["ipHash"], "friends": [], "outgoing": [], "incoming": [] };
                 await fs.writeFile(`/mnt/external/site-data/Frienddata/${targetHash}.json`, JSON.stringify(jsonData, null, 4), 'utf8');
             }
             if (!await fileExists(`/mnt/external/site-data/Frienddata/${ipHash}.json`)){
-                const jsonData = { "private-ip": clientIp, "friends": [], "outgoing": [], "incoming": [] };
+                const jsonData = { "ipHash": ipHash, "friends": [], "outgoing": [], "incoming": [] };
                 await fs.writeFile(`/mnt/external/site-data/Frienddata/${ipHash}.json`, JSON.stringify(jsonData, null, 4), 'utf8');
             }
             const targetData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${targetHash}.json`, 'utf8'));
             const selfData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${ipHash}.json`, 'utf8'));
             const bypassChecks = selfData.incoming.includes(targetHash) || targetData.outgoing.includes(ipHash);
-            if (targetTelemData["ip"] === clientIp) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are trying to friend yourself." })); return; }
-            if (telemData["ip"] != clientIp && !bypassChecks) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are trying to friend yourself." })); return; }
-            if (!isUserOnline(clientIp)) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are not connected to the websocket." })); return; }
+
+            if (targetTelemData["ipHash"] === ipHash) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are trying to friend yourself." })); return; }
+            if (telemData["ipHash"] != ipHash && !bypassChecks) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are trying to friend yourself." })); return; }
+            if (!isUserOnline(ipHash)) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are not connected to the websocket." })); return; }
             if (selfData.friends.length >= 50) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You have hit the friend limit." })); return; }
             if (targetData.friends.length >= 50) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "This person has hit the friend limit." })); return; }
             if (selfData.outgoing.length >= 50) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You have hit the outgoing friend request limit." })); return; }
