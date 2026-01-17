@@ -3,17 +3,25 @@ const https = require('https');
 const fs = require('fs').promises;
 const WebSocket = require('ws');
 const crypto = require('crypto');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const flite = require('flite');
 const util = require('util');
 const sqlite3 = require("sqlite3").verbose();
 
 const execPromise = util.promisify(exec);
+const execFilePromise = util.promisify(execFile);
 
 const db = new sqlite3.Database("/mnt/external/site-data/records.db");
 const dbGet = util.promisify(db.get.bind(db));
 const dbAll = util.promisify(db.all.bind(db));
 const dbRun = util.promisify(db.run.bind(db));
+
+db.configure("busyTimeout", 30000);
+db.on('profile', (sql, time) => {
+    if (time > 100) {
+        console.log(`Slow SQL (${time}ms): ${sql}`);
+    }
+});
 
 let bannedIds = [];
 let DISCORD_WEBHOOK_URL = '';
@@ -26,6 +34,63 @@ let serverData = '{"error":"No data"}';
 let playerIdMap = {};
 
 const filePath = '/home/iidk/site/votes.json';
+
+async function initializeFriendDatabase() {
+    await dbRun(`
+        CREATE TABLE IF NOT EXISTS user_data (
+            ip_hash TEXT PRIMARY KEY,
+            userid TEXT NOT NULL,
+            last_seen INTEGER NOT NULL
+        )
+    `);
+    
+    await dbRun(`
+        CREATE INDEX IF NOT EXISTS idx_userid ON user_data(userid)
+    `);
+    
+    await dbRun(`
+        CREATE TABLE IF NOT EXISTS friendships (
+            user_hash TEXT NOT NULL,
+            friend_hash TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('friend', 'outgoing', 'incoming')),
+            created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
+            PRIMARY KEY (user_hash, friend_hash, status)
+        )
+    `);
+    
+    await dbRun(`
+        CREATE INDEX IF NOT EXISTS idx_friend_lookup ON friendships(friend_hash, status)
+    `);
+
+    // del old friend data
+    const oneMonthAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    
+    try {
+        const result = await dbRun(`
+            DELETE FROM friendships 
+            WHERE created_at < ?
+        `, [oneMonthAgo]);
+        
+        console.log(`Cleaned up old friendships (older than 1 month)`);
+    } catch (err) {
+        console.error('Error cleaning up old friendships:', err.message);
+    }
+}
+
+async function areFriends(userHash, friendHash) {
+    try {
+        const friendship = await dbGet(`
+            SELECT 1 FROM friendships 
+            WHERE user_hash = ? AND friend_hash = ? AND status = 'friend'
+            LIMIT 1
+        `, [userHash, friendHash]);
+        
+        return !!friendship;
+    } catch (err) {
+        console.error('Error checking friendship:', err.message);
+        return false;
+    }
+}
 
 async function initialize() {
     try {
@@ -95,6 +160,9 @@ async function initialize() {
     } catch (e) {
         console.log('Banned IDs file does not exist.');
     }
+
+    await initializeFriendDatabase();
+    console.log('Friend database initialized');
 }
 
 async function incrementVote(option, userId) {
@@ -317,6 +385,7 @@ async function setPoll(poll, a, b) {
     }
 }
 
+/*
 async function processBanData(data, ipHash) {
     const cleanedData = {};
     cleanedData.error = data.error.replace(/[^a-zA-Z0-9 ]/g, '').toUpperCase().slice(0, 512);
@@ -336,6 +405,7 @@ async function processBanData(data, ipHash) {
     }
     return cleanedData;
 }
+    */
 
 function isInvalidId(id) {
   const isShort = id.length <= 10;
@@ -432,6 +502,7 @@ function sendToSyncWebhookID(room, uidfound, userfound, nickfound, color, platfo
     }
 }
 
+/*
 function sendToBanWebhook(error, version, data, ipHash) {
     const targetText = `# Ban Report\n> Ban Message: ${error}\n> Version: ${version}\n-# Enabled Mods: ${data.toString().slice(0, 1024)}${data.toString().length >= 1024 ? "..." : ""}\n-# Report Request ID: ${ipHash}`;
     const webhookData = JSON.stringify({ content: targetText });
@@ -442,9 +513,10 @@ function sendToBanWebhook(error, version, data, ipHash) {
     req.write(webhookData);
     req.end();
 }
+    */
 
 const recordCache = [];
-const MAX_CACHE_SIZE = 5000;
+const MAX_CACHE_SIZE = 100;
 
 function writeRecordAutoRaw(id, nickname, room, cosmetics, color = null, platform = null, timestamp = null) {
     if (!timestamp) timestamp = Date.now();
@@ -452,15 +524,18 @@ function writeRecordAutoRaw(id, nickname, room, cosmetics, color = null, platfor
     record.raw_json = JSON.stringify(record);
     recordCache.push(record);
     if (recordCache.length >= MAX_CACHE_SIZE) {
-        const cacheToFlush = [...recordCache];
-        recordCache.length = 0;
-        flushCacheToDB(cacheToFlush);
+        flushCacheToDB();
     }
 }
 
 let isFlushing = false;
-async function flushCacheToDB(records) {
-    if (!records || records.length === 0 || isFlushing) return;
+async function flushCacheToDB() {
+    if (!recordCache || recordCache.length === 0 || isFlushing) return;
+
+    console.log("Attempting to flush cache");
+
+    const records = [...recordCache];
+    recordCache.length = 0;
 
     isFlushing = true;
     try {
@@ -477,6 +552,7 @@ async function flushCacheToDB(records) {
         try {
             await dbRun("BEGIN TRANSACTION");
             for (const r of records) {
+                console.log("Adding data ",r.nickname,r.id);
                 await stmtRun([r.id, r.nickname, r.room, r.cosmetics, r.color, r.platform, r.timestamp, r.raw_json]);
             }
             await stmtFinalize();
@@ -486,7 +562,9 @@ async function flushCacheToDB(records) {
             console.error("SQLite transaction error:", err.message);
             await dbRun("ROLLBACK").catch(e => console.error("Rollback failed:", e.message));
         }
-    } catch { }
+    } catch (err) {
+        console.error("SQlite pre transaction error:", err.message);
+    }
 
     isFlushing = false;
 }
@@ -578,17 +656,394 @@ function canWriteTelemData(ipHash, userId) {
 }
 
 async function writeTelemData(userid, ipHash, timestamp) {
-    const telemData = { ipHash, timestamp };
-    await fs.writeFile(`/mnt/external/site-data/Telemdata/${userid}.json`, JSON.stringify(telemData, null, 4), 'utf8');
-    const ipData = { userid, timestamp };
-    await fs.writeFile(`/mnt/external/site-data/Ipdata/${ipHash}.json`, JSON.stringify(ipData, null, 4), 'utf8');
+    await dbRun(`
+        INSERT INTO user_data (ip_hash, userid, last_seen)
+        VALUES (?, ?, ?)
+        ON CONFLICT(ip_hash) DO UPDATE SET
+            userid = excluded.userid,
+            last_seen = excluded.last_seen
+    `, [ipHash, userid, timestamp]);
 }
 
-async function countFilesInDirectory(directory) {
-    const entries = await fs.readdir(directory, { withFileTypes: true });
-    return entries.filter(entry => entry.isFile()).length;
+const userDataCache = new Map();
+const friendshipCache = new Map();
+const userDataWriteQueue = [];
+const MAX_USER_DATA_QUEUE = 100;
+const USER_DATA_CACHE_TTL = 5 * 60 * 1000;
+
+setInterval(async () => {
+    if (userDataWriteQueue.length > 0) {
+        await flushUserDataQueue();
+    }
+}, 15000);
+
+process.on('exit', () => flushUserDataQueue());
+process.on('SIGINT', () => { flushUserDataQueue().then(() => process.exit(0)); });
+process.on('SIGTERM', () => { flushUserDataQueue().then(() => process.exit(0)); });
+
+async function flushUserDataQueue() {
+    if (userDataWriteQueue.length === 0 || isFlushing) return;
+
+    console.log("Attempting to flush user data");
+
+    isFlushing = true;
+    const queueToFlush = [...userDataWriteQueue];
+    userDataWriteQueue.length = 0;
+
+    try {
+        const stmt = db.prepare(`
+            INSERT INTO user_data (ip_hash, userid, last_seen)
+            VALUES (?, ?, ?)
+            ON CONFLICT(ip_hash) DO UPDATE SET
+                userid = excluded.userid,
+                last_seen = excluded.last_seen
+        `);
+        const stmtRun = util.promisify(stmt.run.bind(stmt));
+        const stmtFinalize = util.promisify(stmt.finalize.bind(stmt));
+
+        await dbRun("BEGIN TRANSACTION");
+        for (const entry of queueToFlush) {
+            await stmtRun([entry.ipHash, entry.userid, entry.lastSeen]);
+        }
+        await stmtFinalize();
+        await dbRun("COMMIT");
+        console.log(`Flushed ${queueToFlush.length} user_data entries to database.`);
+    } catch (err) {
+        console.error("User data flush error:", err.message);
+        await dbRun("ROLLBACK").catch(e => console.error("Rollback failed:", e.message));
+    }
+
+    isFlushing = false;
 }
 
+async function writeTelemData(userid, ipHash, timestamp) {
+    userDataCache.set(ipHash, {
+        userid,
+        lastSeen: timestamp,
+        cachedAt: Date.now()
+    });
+
+    userDataWriteQueue.push({ ipHash, userid, lastSeen: timestamp });
+
+    if (userDataWriteQueue.length >= MAX_USER_DATA_QUEUE) {
+        await flushUserDataQueue();
+    }
+}
+
+// Helper: Get ipHash from userid (checks cache first)
+async function getIpHashByUserId(userid) {
+    // Check cache first
+    for (const [ipHash, data] of userDataCache.entries()) {
+        if (data.userid === userid && (Date.now() - data.cachedAt) < USER_DATA_CACHE_TTL) {
+            return ipHash;
+        }
+    }
+
+    // Cache miss - query database
+    const row = await dbGet(`
+        SELECT ip_hash FROM user_data WHERE userid = ? ORDER BY last_seen DESC LIMIT 1
+    `, [userid]);
+
+    // Update cache if found
+    if (row) {
+        userDataCache.set(row.ip_hash, {
+            userid,
+            lastSeen: Date.now(),
+            cachedAt: Date.now()
+        });
+    }
+
+    return row?.ip_hash || null;
+}
+
+// Helper: Get userid from ipHash (checks cache first)
+async function getUserIdByIpHash(ipHash) {
+    // Check cache first
+    const cached = userDataCache.get(ipHash);
+    if (cached && (Date.now() - cached.cachedAt) < USER_DATA_CACHE_TTL) {
+        return cached.userid;
+    }
+
+    // Cache miss - query database
+    const row = await dbGet(`
+        SELECT userid FROM user_data WHERE ip_hash = ? LIMIT 1
+    `, [ipHash]);
+
+    // Update cache if found
+    if (row) {
+        userDataCache.set(ipHash, {
+            userid: row.userid,
+            lastSeen: Date.now(),
+            cachedAt: Date.now()
+        });
+    }
+
+    return row?.userid || null;
+}
+
+// Helper: Check if user exists in database (checks cache first)
+async function userExists(ipHash) {
+    // Check cache first
+    if (userDataCache.has(ipHash)) {
+        const cached = userDataCache.get(ipHash);
+        if ((Date.now() - cached.cachedAt) < USER_DATA_CACHE_TTL) {
+            return true;
+        }
+    }
+
+    // Cache miss - query database
+    const row = await dbGet(`
+        SELECT 1 FROM user_data WHERE ip_hash = ? LIMIT 1
+    `, [ipHash]);
+
+    return !!row;
+}
+
+// Helper: Check if two users are friends (with caching)
+async function areFriends(userHash, friendHash) {
+    const cacheKey = `${userHash}:${friendHash}`;
+    
+    // Check cache first
+    const cached = friendshipCache.get(cacheKey);
+    if (cached && (Date.now() - cached.cachedAt) < USER_DATA_CACHE_TTL) {
+        return cached.isFriend;
+    }
+
+    try {
+        const friendship = await dbGet(`
+            SELECT 1 FROM friendships 
+            WHERE user_hash = ? AND friend_hash = ? AND status = 'friend'
+            LIMIT 1
+        `, [userHash, friendHash]);
+        
+        const isFriend = !!friendship;
+
+        // Update cache
+        friendshipCache.set(cacheKey, {
+            isFriend,
+            cachedAt: Date.now()
+        });
+
+        return isFriend;
+    } catch (err) {
+        console.error('Error checking friendship:', err.message);
+        return false;
+    }
+}
+
+function invalidateFriendshipCache(userHash, friendHash) {
+    friendshipCache.delete(`${userHash}:${friendHash}`);
+    friendshipCache.delete(`${friendHash}:${userHash}`);
+}
+
+setInterval(() => {
+    const now = Date.now();
+
+    for (const [key, value] of userDataCache.entries()) {
+        if (now - value.cachedAt > USER_DATA_CACHE_TTL) {
+            userDataCache.delete(key);
+        }
+    }
+
+    for (const [key, value] of friendshipCache.entries()) {
+        if (now - value.cachedAt > USER_DATA_CACHE_TTL) {
+            friendshipCache.delete(key);
+        }
+    }
+}, 60000);
+
+async function getFriendsData(ipHash) {
+    const returnData = { friends: {}, incoming: {}, outgoing: {} };
+
+    if (!await userExists(ipHash)) {
+        return returnData;
+    }
+
+    const friendships = await dbAll(`
+        SELECT friend_hash, status FROM friendships WHERE user_hash = ?
+    `, [ipHash]);
+
+    if (friendships.length === 0) {
+        return returnData;
+    }
+
+    const friendHashes = friendships.map(f => f.friend_hash);
+
+    const placeholders = friendHashes.map(() => '?').join(',');
+    const friendUserData = await dbAll(`
+        SELECT ip_hash, userid FROM user_data WHERE ip_hash IN (${placeholders})
+    `, friendHashes);
+
+    const hashToUserId = {};
+    friendUserData.forEach(row => {
+        hashToUserId[row.ip_hash] = row.userid;
+    });
+
+    const userIds = Object.values(hashToUserId);
+    if (userIds.length === 0) {
+        return returnData;
+    }
+
+    const records = await getLatestRecordsByIds(userIds);
+
+    friendships.forEach(friendship => {
+        const friendHash = friendship.friend_hash;
+        const friendUserId = hashToUserId[friendHash];
+        if (!friendUserId) return;
+
+        const record = records[friendUserId];
+        const online = isUserOnline(friendHash);
+
+        const userData = {
+            currentName: record?.nickname || null,
+            currentUserID: record?.id || null
+        };
+
+        if (friendship.status === 'friend') {
+            returnData.friends[friendHash] = {
+                online,
+                currentRoom: online ? (record?.room || "") : "",
+                ...userData
+            };
+        } else if (friendship.status === 'incoming') {
+            returnData.incoming[friendHash] = userData;
+        } else if (friendship.status === 'outgoing') {
+            returnData.outgoing[friendHash] = userData;
+        }
+    });
+
+    return returnData;
+}
+
+async function friendUser(requesterIpHash, targetUserId) {
+    const targetHash = await getIpHashByUserId(targetUserId);
+    if (!targetHash) {
+        return { success: false, error: "User not found in database." };
+    }
+
+    if (targetHash === requesterIpHash) {
+        return { success: false, error: "You are trying to friend yourself." };
+    }
+
+    if (!await userExists(requesterIpHash)) {
+        return { success: false, error: "You are not connected to the websocket." };
+    }
+
+    const existingFriendship = await dbGet(`
+        SELECT status FROM friendships 
+        WHERE user_hash = ? AND friend_hash = ?
+    `, [requesterIpHash, targetHash]);
+
+    const existingReverse = await dbGet(`
+        SELECT status FROM friendships 
+        WHERE user_hash = ? AND friend_hash = ?
+    `, [targetHash, requesterIpHash]);
+
+    if (existingFriendship?.status === 'friend') {
+        return { success: false, error: "You are already friends with this person." };
+    }
+
+    if (existingFriendship?.status === 'outgoing') {
+        return { success: false, error: "You have already sent a friend request to this person." };
+    }
+
+    const requesterFriendCount = await dbGet(`
+        SELECT COUNT(*) as count FROM friendships 
+        WHERE user_hash = ? AND status = 'friend'
+    `, [requesterIpHash]);
+    
+    if (requesterFriendCount.count >= 50) {
+        return { success: false, error: "You have hit the friend limit." };
+    }
+
+    const targetFriendCount = await dbGet(`
+        SELECT COUNT(*) as count FROM friendships 
+        WHERE user_hash = ? AND status = 'friend'
+    `, [targetHash]);
+    
+    if (targetFriendCount.count >= 50) {
+        return { success: false, error: "This person has hit the friend limit." };
+    }
+
+    const requesterOutgoingCount = await dbGet(`
+        SELECT COUNT(*) as count FROM friendships 
+        WHERE user_hash = ? AND status = 'outgoing'
+    `, [requesterIpHash]);
+    
+    if (requesterOutgoingCount.count >= 50) {
+        return { success: false, error: "You have hit the outgoing friend request limit." };
+    }
+
+    await dbRun("BEGIN TRANSACTION");
+    try {
+        if (existingReverse?.status === 'outgoing') {
+            await dbRun(`
+                DELETE FROM friendships 
+                WHERE (user_hash = ? AND friend_hash = ?) 
+                   OR (user_hash = ? AND friend_hash = ?)
+            `, [requesterIpHash, targetHash, targetHash, requesterIpHash]);
+
+            await dbRun(`
+                INSERT INTO friendships (user_hash, friend_hash, status)
+                VALUES (?, ?, 'friend'), (?, ?, 'friend')
+            `, [requesterIpHash, targetHash, targetHash, requesterIpHash]);
+        } else {
+            await dbRun(`
+                INSERT INTO friendships (user_hash, friend_hash, status)
+                VALUES (?, ?, 'outgoing')
+            `, [requesterIpHash, targetHash]);
+
+            await dbRun(`
+                INSERT INTO friendships (user_hash, friend_hash, status)
+                VALUES (?, ?, 'incoming')
+            `, [targetHash, requesterIpHash]);
+        }
+
+        await dbRun("COMMIT");
+        invalidateFriendshipCache(requesterIpHash, targetHash);
+
+        return { success: true };
+    } catch (err) {
+        await dbRun("ROLLBACK");
+        console.error("Friend request error:", err);
+        return { success: false, error: "Database error." };
+    }
+}
+
+async function unfriendUser(requesterIpHash, targetHash) {
+    if (!await userExists(requesterIpHash)) {
+        return { success: false, error: "You do not have a valid friend file." };
+    }
+
+    const friendship = await dbGet(`
+        SELECT status FROM friendships 
+        WHERE user_hash = ? AND friend_hash = ?
+    `, [requesterIpHash, targetHash]);
+
+    if (!friendship) {
+        return { success: false, error: "You are not friends with this person." };
+    }
+
+    await dbRun("BEGIN TRANSACTION");
+    try {
+        await dbRun(`
+            DELETE FROM friendships 
+            WHERE (user_hash = ? AND friend_hash = ?) 
+               OR (user_hash = ? AND friend_hash = ?)
+        `, [requesterIpHash, targetHash, targetHash, requesterIpHash]);
+
+        await dbRun("COMMIT");
+        invalidateFriendshipCache(requesterIpHash, targetHash);
+
+        return { success: true };
+    } catch (err) {
+        await dbRun("ROLLBACK");
+        console.error("Unfriend error:", err);
+        return { success: false, error: "Database error." };
+    }
+}
+
+/*
 async function fileExists(path) {
   try {
     await fs.access(path);
@@ -675,6 +1130,7 @@ async function getTokenLength() {
         throw e;
     }
 }
+    */
 
 function getRequestBody(req) {
     return new Promise((resolve, reject) => {
@@ -889,152 +1345,197 @@ const server = http.createServer(async (req, res) => {
             }
             ttsRequestTimestamps[clientIp] = Date.now();
             
-            const { text } = await getRequestBody(req);
-            if (!text) { 
-                res.writeHead(400).end(JSON.stringify({ status: 400, error: "No text provided" })); 
-                return; 
-            }
-
-            const cleanText = text.substring(0, 4096);
-            
             try {
-                const audioBuffer = await new Promise((resolve, reject) => {
-                    flite(cleanText, (err, buf) => {
-                        if (err) reject(err);
-                        else resolve(buf);
-                    });
-                });
+                const { text, lang = 'en' } = await getRequestBody(req);
+                console.log(text);
+
+                if (!text || typeof text !== 'string') {
+                    res.writeHead(400).end(JSON.stringify({ status: 400, error: 'Invalid text' })); 
+                    return;
+                }
+                
+                if (text.length > 4096) {
+                    res.writeHead(400).end(JSON.stringify({ status: 400, error: 'Text too long' })); 
+                    return;
+                }
+
+                const outputPath = `/tmp/tts_${crypto.randomBytes(2).toString('hex')}.wav`;
+
+                await execFilePromise('flite', ['-t', text, '-o', outputPath]);
+                const audioData = await fs.readFile(outputPath);
+                await fs.unlink(outputPath).catch(() => {});
                 
                 res.writeHead(200, { 'Content-Type': 'audio/wav' });
-                res.end(audioBuffer, 'binary');
+                res.end(audioData, 'binary');
                 
-            } catch (err) {
-                console.error('TTS error:', err.message);
+            } catch (error) {
+                console.error('TTS error:', error.message);
+
+                if (error.path) {
+                    await fs.unlink(error.path).catch(() => {});
+                }
+                
                 res.writeHead(500).end(JSON.stringify({ 
                     status: 500, 
                     error: 'TTS generation failed' 
                 }));
             }
+        } else if (req.method === 'POST' && req.url === '/translate') { // moved
+            res.writeHead(501, { 'Content-Type': 'application/json' }).end(JSON.stringify({ "translation": "This endpoint has been disabled. Please switch to the official Google Translate API or await your application to update." }));
         } else if (req.method === 'GET' && req.url === "/getfriends") {
-            if (getFriendTime[clientIp] && Date.now() - getFriendTime[clientIp] < 29000) {
-                res.writeHead(429).end(JSON.stringify({ status: 429 })); return;
-            }
-            getFriendTime[clientIp] = Date.now();
-            const data = await getRequestBody(req);
-            let target = ipHash;
-            if (data.key !== undefined && data.key === SECRET_KEY) {
-                target = data.uid.replace(/[^a-zA-Z0-9]/g, '');
-            }
-            const friendDataFile = `/mnt/external/site-data/Frienddata/${target}.json`
-            let returnData = { friends: {}, incoming: {}, outgoing: {} };
-
-            const online = isUserOnline(ipHash);
-            if (online && await fileExists(friendDataFile)){
-                const selfFriendData = JSON.parse(await fs.readFile(friendDataFile, 'utf8'));
-
-                const allIdsMap = {};
-                const processFriendArray = async (array, type) => {
-                    for (const friend of array) {
-                        try {
-                            const friendData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${friend}.json`, 'utf8'));
-                            const ipData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Ipdata/${friendData["ipHash"]}.json`, 'utf8'));
-                            allIdsMap[ipData["userid"]] = { source: type, friend };
-                        } catch (err) {}
-                    }
-                };
-                await processFriendArray(selfFriendData.friends, "friends");
-                await processFriendArray(selfFriendData.incoming, "incoming");
-                await processFriendArray(selfFriendData.outgoing, "outgoing");
-                const allIds = Object.keys(allIdsMap);
-                if (allIds.length === 0) {
-                    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(returnData)); return;
+            try {
+                if (getFriendTime[clientIp] && Date.now() - getFriendTime[clientIp] < 29000) {
+                    res.writeHead(429, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 429, error: "Too many requests." }));
+                    return;
                 }
-                const results = await getLatestRecordsByIds(allIds);
-                Object.entries(results).forEach(([id, record]) => {
-                    const { source, friend } = allIdsMap[id];
-                    const online = isUserOnline(friend);
-                    if (source === "friends") returnData.friends[friend] = { "online": online, "currentRoom": online ? record?.room ?? "" : "", "currentName": record?.nickname ?? null, "currentUserID": record?.id ?? null };
-                    else if (source === "incoming") returnData.incoming[friend] = { "currentName": record?.nickname ?? null, "currentUserID": record?.id ?? null };
-                    else if (source === "outgoing") returnData.outgoing[friend] = { "currentName": record?.nickname ?? null, "currentUserID": record?.id ?? null };
-                });
-            }
-            
-            res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(returnData));
-        }else if (req.method === 'POST' && req.url === "/frienduser") {
-            if (friendModifyTime[clientIp] && Date.now() - friendModifyTime[clientIp] < 1000) {
-                res.writeHead(429).end(JSON.stringify({ status: 429, error: "Too many requests." })); return;
-            }
-            friendModifyTime[clientIp] = Date.now();
-            if (bannedIps[clientIp] && Date.now() - bannedIps[clientIp] < 1800000) { res.writeHead(200).end(JSON.stringify({ status: 200 })); return; }
-            if (req.headers['user-agent'] != 'UnityPlayer/6000.2.9f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)') bannedIps[clientIp] = Date.now();
-            const data = await getRequestBody(req);
-            const target = data.uid.replace(/[^a-zA-Z0-9]/g, '');
-            const targetTelemData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Telemdata/${target}.json`, 'utf8'));
-            const ipData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Ipdata/${ipHash}.json`, 'utf8'));
-            const telemData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Telemdata/${ipData["userid"]}.json`, 'utf8'));
-            const targetHash = targetTelemData["ipHash"];
-            
-            if (!await fileExists(`/mnt/external/site-data/Frienddata/${targetHash}.json`)){
-                const jsonData = { "ipHash": targetTelemData["ipHash"], "friends": [], "outgoing": [], "incoming": [] };
-                await fs.writeFile(`/mnt/external/site-data/Frienddata/${targetHash}.json`, JSON.stringify(jsonData, null, 4), 'utf8');
-            }
-            if (!await fileExists(`/mnt/external/site-data/Frienddata/${ipHash}.json`)){
-                const jsonData = { "ipHash": ipHash, "friends": [], "outgoing": [], "incoming": [] };
-                await fs.writeFile(`/mnt/external/site-data/Frienddata/${ipHash}.json`, JSON.stringify(jsonData, null, 4), 'utf8');
-            }
-            const targetData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${targetHash}.json`, 'utf8'));
-            const selfData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${ipHash}.json`, 'utf8'));
-            const bypassChecks = selfData.incoming.includes(targetHash) || targetData.outgoing.includes(ipHash);
+                getFriendTime[clientIp] = Date.now();
 
-            if (targetTelemData["ipHash"] === ipHash) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are trying to friend yourself." })); return; }
-            if (telemData["ipHash"] != ipHash && !bypassChecks) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are trying to friend yourself." })); return; }
-            if (!isUserOnline(ipHash)) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are not connected to the websocket." })); return; }
-            if (selfData.friends.length >= 50) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You have hit the friend limit." })); return; }
-            if (targetData.friends.length >= 50) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "This person has hit the friend limit." })); return; }
-            if (selfData.outgoing.length >= 50) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You have hit the outgoing friend request limit." })); return; }
-            if (targetData.friends.includes(ipHash) || selfData.friends.includes(targetHash)) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are already friends with this person." })); return; }
-            if (targetData.incoming.includes(ipHash)) { res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You have already sent a friend request to this person." })); return; }
-            if (selfData.incoming.includes(targetHash) || targetData.outgoing.includes(ipHash)) {
-                selfData.incoming = selfData.incoming.filter(entry => entry !== targetHash);
-                targetData.outgoing = targetData.outgoing.filter(entry => entry !== ipHash);
-                if (!selfData.friends.includes(targetHash)) selfData.friends.push(targetHash);
-                if (!targetData.friends.includes(ipHash)) targetData.friends.push(ipHash);
-            } else {
-                if (!selfData.outgoing.includes(targetHash)) selfData.outgoing.push(targetHash);
-                if (!targetData.incoming.includes(ipHash)) targetData.incoming.push(ipHash);
+                const data = await getRequestBody(req);
+                let target = ipHash;
+
+                if (data.key !== undefined && data.key === SECRET_KEY && data.uid) {
+                    const cleanUid = String(data.uid).replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 20);
+                    if (cleanUid.length > 0) {
+                        const targetHash = await getIpHashByUserId(cleanUid);
+                        if (targetHash) {
+                            target = targetHash;
+                        }
+                    }
+                }
+
+                const cleanTarget = String(target).replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 64);
+                if (cleanTarget.length === 0) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 400, error: "Invalid target." }));
+                    return;
+                }
+
+                const online = isUserOnline(cleanTarget);
+                const returnData = online ? await getFriendsData(cleanTarget) : { friends: {}, incoming: {}, outgoing: {} };
+
+                res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(returnData));
+            } catch (err) {
+                console.error('Error in /getfriends:', err.message);
+                res.writeHead(500, { 'Content-Type': 'application/json' })
+                    .end(JSON.stringify({ status: 500, error: "Internal server error." }));
             }
-            await fs.writeFile(`/mnt/external/site-data/Frienddata/${targetHash}.json`, JSON.stringify(targetData, null, 2), 'utf8');
-            await fs.writeFile(`/mnt/external/site-data/Frienddata/${ipHash}.json`, JSON.stringify(selfData, null, 2), 'utf8');
-            res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ "status": 200 }));
+        } else if (req.method === 'POST' && req.url === "/frienduser") {
+            try {
+                if (friendModifyTime[clientIp] && Date.now() - friendModifyTime[clientIp] < 1000) {
+                    res.writeHead(429, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 429, error: "Too many requests." }));
+                    return;
+                }
+                friendModifyTime[clientIp] = Date.now();
+
+                if (bannedIps[clientIp] && Date.now() - bannedIps[clientIp] < 1800000) {
+                    res.writeHead(403, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 403, error: "Forbidden." }));
+                    return;
+                }
+
+                if (req.headers['user-agent'] !== 'UnityPlayer/6000.2.9f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)') {
+                    bannedIps[clientIp] = Date.now();
+                    res.writeHead(403, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 403, error: "Invalid user agent." }));
+                    return;
+                }
+
+                if (!isUserOnline(ipHash)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 400, error: "You are not connected to the websocket." }));
+                    return;
+                }
+
+                const data = await getRequestBody(req);
+
+                if (!data.uid || typeof data.uid !== 'string') {
+                    res.writeHead(400, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 400, error: "Invalid user ID." }));
+                    return;
+                }
+
+                const targetUserId = String(data.uid).replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 20);
+
+                if (targetUserId.length === 0) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 400, error: "Invalid user ID format." }));
+                    return;
+                }
+
+                if (isInvalidId(targetUserId)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 400, error: "Invalid user ID." }));
+                    return;
+                }
+
+                const result = await friendUser(ipHash, targetUserId);
+
+                if (result.success) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 200 }));
+                } else {
+                    res.writeHead(400, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 400, error: result.error }));
+                }
+            } catch (err) {
+                console.error('Error in /frienduser:', err.message);
+                res.writeHead(500, { 'Content-Type': 'application/json' })
+                    .end(JSON.stringify({ status: 500, error: "Internal server error." }));
+            }
         } else if (req.method === 'POST' && req.url === "/unfrienduser") {
-            if (friendModifyTime[clientIp] && Date.now() - friendModifyTime[clientIp] < 1000) {
-                res.writeHead(429).end(JSON.stringify({ status: 429, error: "Too many requests." })); return;
+            try {
+                if (friendModifyTime[clientIp] && Date.now() - friendModifyTime[clientIp] < 1000) {
+                    res.writeHead(429, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 429, error: "Too many requests." }));
+                    return;
+                }
+                friendModifyTime[clientIp] = Date.now();
+
+                if (bannedIps[clientIp] && Date.now() - bannedIps[clientIp] < 1800000) {
+                    res.writeHead(403, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 403, error: "Forbidden." }));
+                    return;
+                }
+
+                if (req.headers['user-agent'] !== 'UnityPlayer/6000.2.9f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)') {
+                    bannedIps[clientIp] = Date.now();
+                    res.writeHead(403, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 403, error: "Invalid user agent." }));
+                    return;
+                }
+
+                const data = await getRequestBody(req);
+
+                if (!data.uid || typeof data.uid !== 'string') {
+                    res.writeHead(400, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 400, error: "Invalid hash." }));
+                    return;
+                }
+
+                const targetHash = String(data.uid).replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 64);
+
+                if (targetHash.length === 0) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 400, error: "Invalid hash format." }));
+                    return;
+                }
+
+                const result = await unfriendUser(ipHash, targetHash);
+
+                if (result.success) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 200 }));
+                } else {
+                    res.writeHead(400, { 'Content-Type': 'application/json' })
+                        .end(JSON.stringify({ status: 400, error: result.error }));
+                }
+            } catch (err) {
+                console.error('Error in /unfrienduser:', err.message);
+                res.writeHead(500, { 'Content-Type': 'application/json' })
+                    .end(JSON.stringify({ status: 500, error: "Internal server error." }));
             }
-            friendModifyTime[clientIp] = Date.now();
-            if (bannedIps[clientIp] && Date.now() - bannedIps[clientIp] < 1800000) { res.writeHead(200).end(JSON.stringify({ status: 200 })); return; }
-            if (req.headers['user-agent'] != 'UnityPlayer/6000.2.9f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)') bannedIps[clientIp] = Date.now();
-            if (!await fileExists(`/mnt/external/site-data/Frienddata/${ipHash}.json`)){
-                res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You do not have a valid friend file." })); return;
-            }
-            const data = await getRequestBody(req);
-            const targetHash = data.uid.replace(/[^a-zA-Z0-9]/g, '');
-            const targetData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${targetHash}.json`, 'utf8'));
-            const selfData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${ipHash}.json`, 'utf8'));
-            if (targetData.friends.includes(ipHash) && selfData.friends.includes(targetHash)) {
-                targetData.friends = targetData.friends.filter(entry => entry !== ipHash);
-                selfData.friends = selfData.friends.filter(entry => entry !== targetHash);
-            } else if (selfData.outgoing.includes(targetHash) || targetData.incoming.includes(ipHash)) {
-                selfData.outgoing = selfData.outgoing.filter(entry => entry !== targetHash);
-                targetData.incoming = targetData.incoming.filter(entry => entry !== ipHash);
-            } else if (selfData.incoming.includes(targetHash) || targetData.outgoing.includes(ipHash)) {
-                selfData.incoming = selfData.incoming.filter(entry => entry !== targetHash);
-                targetData.outgoing = targetData.outgoing.filter(entry => entry !== ipHash);
-            } else {
-                res.writeHead(400).end(JSON.stringify({ "status": 400, "error": "You are not friends with this person." })); return;
-            }
-            await fs.writeFile(`/mnt/external/site-data/Frienddata/${targetHash}.json`, JSON.stringify(targetData, null, 2), 'utf8');
-            await fs.writeFile(`/mnt/external/site-data/Frienddata/${ipHash}.json`, JSON.stringify(selfData, null, 2), 'utf8');
-            res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ "status": 200 }));
         } else if (req.method === 'GET' && req.url === '/gpt') {
             res.writeHead(501).end(JSON.stringify({ status: 501 }));
             /*
@@ -1116,6 +1617,7 @@ wss.on('connection', (ws, req) => {
         ws.close(1008, "Wait before reconnecting to websocket");
         return;
     }
+
     joinDelay[clientIp] = Date.now();
 
     clients.set(ipHash, ws);
@@ -1128,45 +1630,97 @@ wss.on('connection', (ws, req) => {
 
             const data = JSON.parse(message.toString());
             const command = data.command;
-            
-            if (!["invite", "reqinvite", "preferences", "theme", "macro", "message"].includes(command)) return;
 
-            const targetHash = data.target.replace(/[^a-zA-Z0-9]/g, '');
-
-            if (!await fileExists(`/mnt/external/site-data/Frienddata/${ipHash}.json`)){
-                console.error('User has no friend data'); return;
+            if (!["invite", "reqinvite", "preferences", "theme", "macro", "message"].includes(command)) {
+                console.log(`Invalid command from ${ipHash}: ${command}`);
+                return;
             }
 
-            const targetData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${targetHash}.json`, 'utf8'));
-            const selfData = JSON.parse(await fs.readFile(`/mnt/external/site-data/Frienddata/${ipHash}.json`, 'utf8'));
+            if (!data.target || typeof data.target !== 'string') {
+                console.log(`Missing or invalid target from ${ipHash}`);
+                return;
+            }
 
-            if (!targetData.friends.includes(ipHash) && !selfData.friends.includes(targetHash)) return;
+            const targetHash = String(data.target).replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 64);
+            
+            if (targetHash.length === 0) {
+                console.log(`Empty target hash from ${ipHash}`);
+                return;
+            }
+
+            const isFriend = await areFriends(ipHash, targetHash);
+            if (!isFriend) {
+                console.log(`${ipHash} attempted to message non-friend ${targetHash}`);
+                return;
+            }
 
             const targetWs = clients.get(targetHash);
-            if (!targetWs || targetWs.readyState !== WebSocket.OPEN) return;
+            if (!targetWs || targetWs.readyState !== WebSocket.OPEN) {
+                console.log(`Target ${targetHash} not online`);
+                return;
+            }
 
             let payload;
             switch (command) {
                 case "invite":
-                    payload = { command: "invite", from: ipHash, to: data.room.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 12) };
+                    if (!data.room || typeof data.room !== 'string') {
+                        console.log(`Invalid room data from ${ipHash}`);
+                        return;
+                    }
+                    const cleanRoom = String(data.room).replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 12);
+                    if (cleanRoom.length === 0) {
+                        console.log(`Empty room code from ${ipHash}`);
+                        return;
+                    }
+                    payload = { command: "invite", from: ipHash, to: cleanRoom };
                     break;
+
                 case "reqinvite":
                     payload = { command: "reqinvite", from: ipHash };
                     break;
+
                 case "preferences":
+                    if (!data.preferences) {
+                        console.log(`Missing preferences data from ${ipHash}`);
+                        return;
+                    }
                     payload = { command: "preferences", from: ipHash, data: data.preferences };
                     break;
+
                 case "theme":
+                    if (!data.theme) {
+                        console.log(`Missing theme data from ${ipHash}`);
+                        return;
+                    }
                     payload = { command: "theme", from: ipHash, data: data.theme };
                     break;
+
                 case "macro":
+                    if (!data.macro) {
+                        console.log(`Missing macro data from ${ipHash}`);
+                        return;
+                    }
                     payload = { command: "macro", from: ipHash, data: data.macro };
                     break;
+
                 case "message":
-                    payload = { command: "message", from: ipHash, message: data.message, color: data.color.replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 12) };
+                    if (!data.message || typeof data.message !== 'string') {
+                        console.log(`Invalid message from ${ipHash}`);
+                        return;
+                    }
+                    if (!data.color || typeof data.color !== 'string') {
+                        console.log(`Invalid color from ${ipHash}`);
+                        return;
+                    }
+                    const cleanColor = String(data.color).replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 12);
+                    const cleanMessage = String(data.message).slice(0, 512);
+                    payload = { command: "message", from: ipHash, message: cleanMessage, color: cleanColor };
                     break;
             }
-            if (payload) targetWs.send(JSON.stringify(payload));
+
+            if (payload) {
+                targetWs.send(JSON.stringify(payload));
+            }
 
         } catch (err) {
             console.error('Error processing websocket message:', err.message);
@@ -1176,6 +1730,10 @@ wss.on('connection', (ws, req) => {
     ws.on('close', () => {
         clients.delete(ipHash);
         console.log(`Client disconnected: ${ipHash}`);
+    });
+
+    ws.on('error', (err) => {
+        console.error(`WebSocket error for ${ipHash}:`, err.message);
     });
 });
 
