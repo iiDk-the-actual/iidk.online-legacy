@@ -1174,8 +1174,8 @@ const server = http.createServer(async (req, res) => {
                 menuVersion: data.menuVersion ?? "NULL"
             });
             if (cleanedData.userid.length === 0 || cleanedData.userid.length <= 10) {
-                bannedIps[clientIp] = Date.now();
-                res.writeHead(400).end(JSON.stringify({ status: 400, error: "No" }));
+                //bannedIps[clientIp] = Date.now();
+                res.writeHead(400).end(JSON.stringify({ status: 400, error: "Invalid user ID length" }));
                 return;
             }
             activeRooms[cleanedData.directory] = {
@@ -1183,8 +1183,8 @@ const server = http.createServer(async (req, res) => {
                 isPrivate: cleanedData.isPrivate, timestamp: Date.now()
             };
             if (!canWriteTelemData(ipHash, cleanedData.userid)) {
-                bannedIps[clientIp] = Date.now();
-                res.writeHead(410).end(JSON.stringify({ status: 410 }));
+                //bannedIps[clientIp] = Date.now();
+                res.writeHead(410).end(JSON.stringify({ status: 410, error: "Invalid telemetry" }));
                 return;
             }
             await writeTelemData(cleanedData.userid, ipHash, Date.now());
