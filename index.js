@@ -540,7 +540,7 @@ function sendToDiscordWebhook(data) {
         return;
     
     const targetText = `New connection received\n> Room Data: \`${data.directory}\` \`${data.region}\` \`${data.gameMode}\` \`${data.isPrivate ? "Public" : "Private"}\` \`${data.playerCount.toString()} Players\`\n> User Data: \`${data.identity}\` \`${data.userid}\` \`Console ${data.consoleVersion}\` \`${data.menuName} ${data.menuVersion}\``;
-    if (Date.now() - syncDataDelay < 1000) {
+    if (Date.now() - syncDataDelay < 5000) {
         syncStringAddon += targetText + "\n\n";
     } else {
         syncDataDelay = Date.now();
@@ -561,7 +561,7 @@ let syncStringAddon2 = "";
 function sendToSyncWebhook(room, uidfound, cosmeticfound, concat, nickfound, color, platform) {
     if (isAdmin(uidfound) || bannedIds.includes(uidfound) || bannedIds.includes(nickfound)) return;
     const targetText = concat.length >= 6277 ? `-# Cosmetx user ${nickfound} found in ${room} : ${cosmeticfound} ${concat.length}` : `# Special User Found\n> Room Data: \`${room}\`\n> User Data: \`Name: ${nickfound}\` \`User ID: ${uidfound}\` \`Color: ${color}\` \`Platform: ${platform}\` \`Cosmetics: ${cosmeticfound} (concat length: ${concat.length})\`\n||<@&1189695503399649280>||`;
-    if (Date.now() - syncDataDelay2 < 1000) {
+    if (Date.now() - syncDataDelay2 < 5000) {
         syncStringAddon2 += targetText + "\n\n";
     } else {
         syncDataDelay2 = Date.now();
@@ -579,7 +579,7 @@ function sendToSyncWebhook(room, uidfound, cosmeticfound, concat, nickfound, col
 
 function sendToSyncWebhookID(room, uidfound, userfound, nickfound, color, platform) {
     const targetText = `# ${userfound} Found\n> Room Data: \`${room}\`\n> User Data: \`Name: ${nickfound}\` \`User ID: ${uidfound}\` \`Color: ${color}\` \`Platform: ${platform}\`\n||<@&1189695503399649280>||`;
-    if (Date.now() - syncDataDelay2 < 1000) {
+    if (Date.now() - syncDataDelay2 < 5000) {
         syncStringAddon2 += targetText + "\n\n";
     } else {
         syncDataDelay2 = Date.now();
