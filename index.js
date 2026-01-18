@@ -1230,7 +1230,7 @@ async function getTokenLength() {
 }
     */
 
-function getRequestBody(req, maxBytes = 8 * 1024)/*128kb*/ {
+function getRequestBody(req, maxBytes = 12 * 1024)/*128kb*/ {
     return new Promise((resolve, reject) => {
         let body = '';
         let bodySize = 0;
