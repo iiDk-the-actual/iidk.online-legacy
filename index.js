@@ -1245,7 +1245,7 @@ const server = http.createServer(async (req, res) => {
         const clientIp = req.headers['cf-connecting-ip'] || req.socket.remoteAddress;
         const ipHash = hashIpAddr(clientIp);
 
-        console.log(`${clientIp} ${req.method} ${req.url}`);
+        console.log(`${ipHash} ${req.method} ${req.url}`);
 
         if (req.method === 'POST' && (req.url === '/telementery' || req.url === '/telemetry')) {
             if (ipRequestTimestamps[clientIp] && Date.now() - ipRequestTimestamps[clientIp] < 6000) {
@@ -1722,7 +1722,7 @@ wss.on('connection', (ws, req) => {
     joinDelay[clientIp] = Date.now();
 
     clients.set(ipHash, ws);
-    console.log(`Client connected from ${clientIp} (#${clients.size})`);
+    console.log(`Client connected from ${ipHash} (#${clients.size})`);
 
     ws.on('message', async message => {
         try {
