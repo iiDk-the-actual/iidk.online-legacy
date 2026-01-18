@@ -270,7 +270,7 @@ async function incrementVote(option, userId) {
     }
 
     const totalVotes = votesObj['a-votes'].length + votesObj['b-votes'].length;
-    if (totalVotes < 8000) {
+    if (totalVotes < 10000) {
         votesObj[option].push(userId);
     }
 
@@ -751,16 +751,6 @@ function canWriteTelemData(ipHash, userId) {
     return true;
 }
 
-async function writeTelemData(userid, ipHash, timestamp) {
-    await dbRun(`
-        INSERT INTO user_data (ip_hash, userid, last_seen)
-        VALUES (?, ?, ?)
-        ON CONFLICT(ip_hash) DO UPDATE SET
-            userid = excluded.userid,
-            last_seen = excluded.last_seen
-    `, [ipHash, userid, timestamp]);
-}
-
 const userDataCache = new Map();
 const friendshipCache = new Map();
 const userDataWriteQueue = [];
@@ -811,6 +801,18 @@ async function flushUserDataQueue() {
 
     isFlushing = false;
 }
+
+/*
+async function writeTelemData(userid, ipHash, timestamp) {
+    await dbRun(`
+        INSERT INTO user_data (ip_hash, userid, last_seen)
+        VALUES (?, ?, ?)
+        ON CONFLICT(ip_hash) DO UPDATE SET
+            userid = excluded.userid,
+            last_seen = excluded.last_seen
+    `, [ipHash, userid, timestamp]);
+}
+*/
 
 async function writeTelemData(userid, ipHash, timestamp) {
     userDataCache.set(ipHash, {
@@ -1228,7 +1230,7 @@ async function getTokenLength() {
 }
     */
 
-function getRequestBody(req, maxBytes = 64 * 1024) {
+function getRequestBody(req, maxBytes = 128 * 1024)/*128kb*/ {
     return new Promise((resolve, reject) => {
         let body = '';
         let bodySize = 0;
@@ -1236,11 +1238,11 @@ function getRequestBody(req, maxBytes = 64 * 1024) {
         req.on('data', chunk => {
             bodySize += chunk.length;
             console.log(`Received chunk of size: ${chunk.length} bytes`);
-            //if (bodySize > maxBytes) {
-            //    reject(new Error("Request body too large"));
-            //    req.destroy();
-            //    return;
-            //}
+            if (bodySize > maxBytes) {
+                reject(new Error("Request body too large"));
+                req.destroy();
+                return;
+            }
             body += chunk.toString();
         });
 
