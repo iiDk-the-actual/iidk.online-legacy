@@ -269,7 +269,10 @@ async function incrementVote(option, userId) {
         return false;
     }
 
-    votesObj[option].push(userId);
+    const totalVotes = votesObj['a-votes'].length + votesObj['b-votes'].length;
+    if (totalVotes < 8000) {
+        votesObj[option].push(userId);
+    }
 
     console.log(`User ${userId} voted for ${option}`);
     return true;
@@ -1225,10 +1228,22 @@ async function getTokenLength() {
 }
     */
 
-function getRequestBody(req) {
+function getRequestBody(req, maxBytes = 64 * 1024) {
     return new Promise((resolve, reject) => {
         let body = '';
-        req.on('data', chunk => body += chunk.toString());
+        let bodySize = 0;
+
+        req.on('data', chunk => {
+            bodySize += chunk.length;
+            console.log(`Received chunk of size: ${chunk.length} bytes`);
+            //if (bodySize > maxBytes) {
+            //    reject(new Error("Request body too large"));
+            //    req.destroy();
+            //    return;
+            //}
+            body += chunk.toString();
+        });
+
         req.on('end', () => {
             try {
                 resolve(body ? JSON.parse(body) : {});
@@ -1236,6 +1251,7 @@ function getRequestBody(req) {
                 reject(new Error("Invalid JSON body"));
             }
         });
+
         req.on('error', err => reject(err));
     });
 }
