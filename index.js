@@ -16,10 +16,10 @@ const dbGet = util.promisify(db.get.bind(db));
 const dbAll = util.promisify(db.all.bind(db));
 const dbRun = util.promisify(db.run.bind(db));
 
-db.configure("busyTimeout", 30000);
+db.configure("busyTimeout", 1000);
 db.on('profile', (sql, time) => {
-    if (time > 100) {
-        console.log(`Slow SQL (${time}ms): ${sql}`);
+    if (time > 300) {
+        console.log(`Slow SQL (${time}ms)`);
     }
 });
 
@@ -137,6 +137,100 @@ async function initialize() {
         votesObj = { "a-votes": [], "b-votes": [] };
     }
 
+    async function writeVotesToFile() {
+        try {
+            await fs.writeFile(filePath, JSON.stringify(votesObj, null, 2), 'utf8');
+            console.log(`File written successfully at ${new Date().toLocaleTimeString()}`);
+        } catch (error) {
+            console.error('Error writing file:', error);
+        }
+    }
+
+    setInterval(writeVotesToFile, 60000);
+
+    function cleanupOldTimestamps() {
+        const now = Date.now();
+        const oneHour = 60 * 60 * 1000;
+        
+        console.log('Running hourly cleanup...');
+
+        for (const ip in ipRequestTimestamps) {
+            if (now - ipRequestTimestamps[ip] > oneHour) {
+                delete ipRequestTimestamps[ip];
+            }
+        }
+
+        for (const ip in syncDataRequestTimestamps) {
+            if (now - syncDataRequestTimestamps[ip] > oneHour) {
+                delete syncDataRequestTimestamps[ip];
+            }
+        }
+
+        for (const ip in voteDelay) {
+            if (now - voteDelay[ip] > (2 * oneHour)) {
+                delete voteDelay[ip];
+            }
+        }
+
+        for (const ip in ttsRequestTimestamps) {
+            if (now - ttsRequestTimestamps[ip] > oneHour) {
+                delete ttsRequestTimestamps[ip];
+            }
+        }
+
+        for (const ip in getFriendTime) {
+            if (now - getFriendTime[ip] > oneHour) {
+                delete getFriendTime[ip];
+            }
+        }
+
+        for (const ip in friendModifyTime) {
+            if (now - friendModifyTime[ip] > oneHour) {
+                delete friendModifyTime[ip];
+            }
+        }
+
+        for (const ip in bannedIps) {
+            if (now - bannedIps[ip] > oneHour) {
+                delete bannedIps[ip];
+            }
+        }
+
+        for (const dir in activeRooms) {
+            if (now - activeRooms[dir].timestamp > (30 * 60 * 1000)) {
+                delete activeRooms[dir];
+            }
+        }
+
+        for (const dir in activeUserData) {
+            if (now - activeUserData[dir].timestamp > (30 * 60 * 1000)) {
+                delete activeUserData[dir];
+            }
+        }
+
+        for (const ipHash in ipTelemetryLock) {
+            if (now - ipTelemetryLock[ipHash].timestamp > (2 * oneHour)) {
+                delete ipTelemetryLock[ipHash];
+            }
+        }
+
+        for (const ip in socketDelay) {
+            if (now - socketDelay[ip] > oneHour) {
+                delete socketDelay[ip];
+            }
+        }
+
+        for (const ip in joinDelay) {
+            if (now - joinDelay[ip] > oneHour) {
+                delete joinDelay[ip];
+            }
+        }
+        
+        console.log('Hourly cleanup completed');
+    }
+
+    setInterval(cleanupOldTimestamps, 60 * 60 * 1000);
+
     await updateServerData();
 
     try {
@@ -177,14 +271,12 @@ async function incrementVote(option, userId) {
 
     votesObj[option].push(userId);
 
-    await fs.writeFile(filePath, JSON.stringify(votesObj, null, 2), 'utf8');
     console.log(`User ${userId} voted for ${option}`);
     return true;
 }
 
 async function resetVotes() {
     votesObj = { "a-votes": [], "b-votes": [] };
-    await fs.writeFile(filePath, JSON.stringify(votesObj, null, 2), 'utf8');
     console.log('Votes have been reset');
 }
 
@@ -212,6 +304,7 @@ async function updateServerData() {
 
 const ipRequestTimestamps = {};
 const syncDataRequestTimestamps = {};
+const voteDelay = {};
 const ttsRequestTimestamps = {};
 const getFriendTime = {};
 const friendModifyTime = {};
@@ -246,7 +339,7 @@ async function cleanAndFormatSyncData(data) {
         const user = data.data[userId];
         const newUserId = userId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 20);
         user.nickname = user.nickname.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 12);
-        user.cosmetics = user.cosmetics.toUpperCase().slice(0, 16384);
+        user.cosmetics = user.cosmetics.toUpperCase().slice(0, 12000);
         let color = user.color !== undefined ? user.color : "NULL";
         user.color = color.slice(0, 20);
         let platform = user.platform !== undefined ? user.platform : "NULL";
@@ -552,7 +645,7 @@ async function flushCacheToDB() {
         try {
             await dbRun("BEGIN TRANSACTION");
             for (const r of records) {
-                console.log("Adding data ",r.nickname,r.id);
+                // console.log("Adding data ",r.nickname,r.id);
                 await stmtRun([r.id, r.nickname, r.room, r.cosmetics, r.color, r.platform, r.timestamp, r.raw_json]);
             }
             await stmtFinalize();
@@ -1149,10 +1242,10 @@ function getRequestBody(req) {
 
 const server = http.createServer(async (req, res) => {
     try {
-        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        const clientIp = req.headers['cf-connecting-ip'] || req.socket.remoteAddress;
         const ipHash = hashIpAddr(clientIp);
 
-        console.log(`${ipHash} ${req.method} ${req.url}`);
+        console.log(`${clientIp} ${req.method} ${req.url}`);
 
         if (req.method === 'POST' && (req.url === '/telementery' || req.url === '/telemetry')) {
             if (ipRequestTimestamps[clientIp] && Date.now() - ipRequestTimestamps[clientIp] < 6000) {
@@ -1240,6 +1333,10 @@ const server = http.createServer(async (req, res) => {
         } else if (req.method === 'GET' && req.url === '/serverdata') {
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(serverData);
         } else if (req.method === 'POST' && req.url === '/vote') {
+            if (voteDelay[clientIp] && Date.now() - voteDelay[clientIp] < (1000*(60*60))) {
+                res.writeHead(429).end(JSON.stringify({ status: 429 })); return;
+            }
+            voteDelay[clientIp] = Date.now();
             const { option } = await getRequestBody(req);
             const success = await incrementVote(option, ipHash);
             if (success) {
@@ -1347,7 +1444,6 @@ const server = http.createServer(async (req, res) => {
             
             try {
                 const { text, lang = 'en' } = await getRequestBody(req);
-                console.log(text);
 
                 if (!text || typeof text !== 'string') {
                     res.writeHead(400).end(JSON.stringify({ status: 400, error: 'Invalid text' })); 
@@ -1587,7 +1683,7 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200, count: await getTokenLength() }));
             */
         } else if (req.method === 'GET' && (req.url === "/" || req.url === "")) {
-            res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200, message: "This is an API. You can not view it like a website. Check out https://github.com/iiDk-the-actual/iidk.online for more info." }));
+            res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 200, message: "This is an API. You can not view it like a website. It is used for the admin and friend system on ii's Stupid Menu. For more information, check out https://github.com/iiDk-the-actual/iis.Stupid.Menu" }));
         } else {
             res.writeHead(404, { 'Content-Type': 'application/json' }).end(JSON.stringify({ status: 404 }));
         }
@@ -1618,10 +1714,15 @@ wss.on('connection', (ws, req) => {
         return;
     }
 
+    if (isUserOnline(ipHash)){
+        ws.close(1008, "You are already connected");
+        return;
+    }
+
     joinDelay[clientIp] = Date.now();
 
     clients.set(ipHash, ws);
-    console.log(`Client connected from ${ipHash} (#${clients.size})`);
+    console.log(`Client connected from ${clientIp} (#${clients.size})`);
 
     ws.on('message', async message => {
         try {
