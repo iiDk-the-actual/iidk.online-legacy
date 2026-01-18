@@ -1230,14 +1230,13 @@ async function getTokenLength() {
 }
     */
 
-function getRequestBody(req, maxBytes = 128 * 1024)/*128kb*/ {
+function getRequestBody(req, maxBytes = 8 * 1024)/*128kb*/ {
     return new Promise((resolve, reject) => {
         let body = '';
         let bodySize = 0;
 
         req.on('data', chunk => {
             bodySize += chunk.length;
-            console.log(`Received chunk of size: ${chunk.length} bytes`);
             if (bodySize > maxBytes) {
                 reject(new Error("Request body too large"));
                 req.destroy();
