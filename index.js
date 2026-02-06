@@ -338,7 +338,7 @@ async function cleanAndFormatSyncData(data) {
     let count = 0;
 
     for (let userId in data.data) {
-        if (count >= 10) break;
+        if (count >= 20) break;
         const user = data.data[userId];
         const newUserId = userId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 20);
         user.nickname = user.nickname.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 12);
