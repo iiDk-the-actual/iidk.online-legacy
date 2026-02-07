@@ -1544,20 +1544,20 @@ const server = http.createServer(async (req, res) => {
 
                 if (bannedIps[clientIp] && Date.now() - bannedIps[clientIp] < 1800000) {
                     res.writeHead(403, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 403, error: "Forbidden." }));
+                        .end(JSON.stringify({ status: 403, error: "Unknown error." }));
                     return;
                 }
 
                 if (req.headers['user-agent'] !== 'UnityPlayer/6000.2.9f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)') {
                     bannedIps[clientIp] = Date.now();
                     res.writeHead(403, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 403, error: "Invalid user agent." }));
+                        .end(JSON.stringify({ status: 403, error: "Unknown error." }));
                     return;
                 }
 
                 if (!isUserOnline(ipHash)) {
                     res.writeHead(400, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 400, error: "You are not connected to the websocket." }));
+                        .end(JSON.stringify({ status: 400, error: "Unknown error." }));
                     return;
                 }
 
@@ -1565,7 +1565,7 @@ const server = http.createServer(async (req, res) => {
 
                 if (!data.uid || typeof data.uid !== 'string') {
                     res.writeHead(400, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 400, error: "Invalid user ID." }));
+                        .end(JSON.stringify({ status: 400, error: "Unknown error." }));
                     return;
                 }
 
@@ -1573,13 +1573,13 @@ const server = http.createServer(async (req, res) => {
 
                 if (targetUserId.length === 0) {
                     res.writeHead(400, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 400, error: "Invalid user ID format." }));
+                        .end(JSON.stringify({ status: 400, error: "Unknown error." }));
                     return;
                 }
 
                 if (isInvalidId(targetUserId)) {
                     res.writeHead(400, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 400, error: "Invalid user ID." }));
+                        .end(JSON.stringify({ status: 400, error: "Unknown error." }));
                     return;
                 }
 
@@ -1608,14 +1608,14 @@ const server = http.createServer(async (req, res) => {
 
                 if (bannedIps[clientIp] && Date.now() - bannedIps[clientIp] < 1800000) {
                     res.writeHead(403, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 403, error: "Forbidden." }));
+                        .end(JSON.stringify({ status: 403, error: "Unknown error." }));
                     return;
                 }
 
                 if (req.headers['user-agent'] !== 'UnityPlayer/6000.2.9f1 (UnityWebRequest/1.0, libcurl/8.10.1-DEV)') {
                     bannedIps[clientIp] = Date.now();
                     res.writeHead(403, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 403, error: "Invalid user agent." }));
+                        .end(JSON.stringify({ status: 403, error: "Unknown error." }));
                     return;
                 }
 
@@ -1623,7 +1623,7 @@ const server = http.createServer(async (req, res) => {
 
                 if (!data.uid || typeof data.uid !== 'string') {
                     res.writeHead(400, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 400, error: "Invalid hash." }));
+                        .end(JSON.stringify({ status: 400, error: "Unknown error." }));
                     return;
                 }
 
@@ -1631,7 +1631,7 @@ const server = http.createServer(async (req, res) => {
 
                 if (targetHash.length === 0) {
                     res.writeHead(400, { 'Content-Type': 'application/json' })
-                        .end(JSON.stringify({ status: 400, error: "Invalid hash format." }));
+                        .end(JSON.stringify({ status: 400, error: "Unknown error." }));
                     return;
                 }
 
