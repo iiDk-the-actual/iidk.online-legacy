@@ -1014,10 +1014,10 @@ async function getFriendsData(ipHash) {
 }
 
 async function friendUser(requesterIpHash, targetUserId) {
-    const targetHash = await getIpHashByUserId(targetUserId);
-    if (!targetHash) {
-        return { success: false, error: "User not found in database." };
-    }
+    //const targetHash = await getIpHashByUserId(targetUserId);
+    //if (!targetHash) {
+    //    return { success: false, error: "User not found in database." };
+    //}
 
     if (targetHash === requesterIpHash) {
         return { success: false, error: "You are trying to friend yourself." };
