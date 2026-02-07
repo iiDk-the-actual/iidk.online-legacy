@@ -1020,11 +1020,11 @@ async function friendUser(requesterIpHash, targetUserId) {
     }
 
     if (targetHash === requesterIpHash) {
-        return { success: false, error: "You are trying to friend yourself." };
+        return { success: false, error: "Unknown error." };
     }
 
     if (!await userExists(requesterIpHash)) {
-        return { success: false, error: "You are not connected to the websocket." };
+        return { success: false, error: "Unknown error." };
     }
 
     const existingFriendship = await dbGet(`
@@ -1110,7 +1110,7 @@ async function friendUser(requesterIpHash, targetUserId) {
 
 async function unfriendUser(requesterIpHash, targetHash) {
     if (!await userExists(requesterIpHash)) {
-        return { success: false, error: "You do not have a valid friend file." };
+        return { success: false, error: "Unknown error." };
     }
 
     const friendship = await dbGet(`
