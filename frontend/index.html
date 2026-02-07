@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>ii's Stupid Menu</title>
+    <meta content="ii's Stupid Menu" property="og:title"/>
+    <meta content="Web UI for ii's Stupid Menu" property="og:description"/>
+    <meta content="https://frc6548.github.io/data/icon-white.png" property="og:image"/>
+    <meta content="#ff4040" data-react-helmet="true" name="theme-color"/>
+    
+    <link rel="icon" type="image/png" href="/cone.png">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="main">
+        <h1 class="main-title" style="margin-top: 16px; margin-bottom: 32px;">ii's Stupid Menu</h1>
+        <div class="content-wrapper">
+            <nav class="sidebar">
+                <button class="sidebar-btn" data-target="friends">Friends</button>
+                <button class="sidebar-btn" data-target="web">Web Integration</button>
+                <button class="sidebar-btn" data-target="settings">Settings</button>
+            </nav>
+            <div class="content-area">
+                <div class="content-view" id="view-friends">F.</div>
+                <div class="content-view" id="view-web" style="display:none;">W.</div>
+                <div class="content-view" id="view-settings" style="display:none;">S.</div>
+            </div>
+        </div>
+    </div>
+    <script>
+    // Sidebar tab switching logic
+    document.querySelectorAll('.sidebar-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.content-view').forEach(view => view.style.display = 'none');
+            document.getElementById('view-' + this.dataset.target).style.display = '';
+            document.querySelectorAll('.sidebar-btn').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+        });
+    });
+    // Set default active
+    document.querySelector('.sidebar-btn[data-target="friends"]').classList.add('active');
+    </script>
+</body>
