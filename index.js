@@ -1348,6 +1348,7 @@ const server = http.createServer(async (req, res) => {
             const record = await getLatestRecordById(uid);
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(record ? JSON.stringify(record) : "{}");
         } else if (req.method === 'GET' && req.url === '/serverdata') {
+            await updateServerData(); // cloudflare caches it anyway who care
             res.writeHead(200, { 'Content-Type': 'application/json' }).end(serverData);
         } else if (req.method === 'POST' && req.url === '/vote') {
             if (voteDelay[clientIp] && Date.now() - voteDelay[clientIp] < (1000*(60*60))) {
